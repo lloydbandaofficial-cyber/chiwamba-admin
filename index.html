@@ -32,9 +32,17 @@ button.sm{width:auto;margin:0;padding:6px 12px;font-size:.85rem}
 .row span{min-width:0;overflow-wrap:anywhere}
 .msg{margin-top:10px;font-weight:600}
 .hint{font-size:.85rem;opacity:.7}
+#bar{position:fixed;top:0;left:0;right:0;height:4px;background:var(--gold);overflow:hidden;z-index:9}
+#bar::after{content:"";position:absolute;top:0;bottom:0;width:35%;background:var(--red);animation:slide 1s ease-in-out infinite}
+@keyframes slide{0%{left:-35%}100%{left:100%}}
+.spinner{width:34px;height:34px;margin:6px auto 12px;border:4px solid var(--line);border-top-color:var(--red);border-radius:50%;animation:spin .8s linear infinite}
+@keyframes spin{to{transform:rotate(360deg)}}
+.wait{text-align:center}
+@media (prefers-reduced-motion:reduce){#bar::after,.spinner{animation-duration:3s}}
 </style>
 </head>
 <body>
+<div id="bar" hidden></div>
 <header><span>Chiwamba Admin</span><button id="out" hidden>Log out</button></header>
 <main id="app"></main>
 <script>
@@ -44,14 +52,20 @@ const app = document.getElementById("app");
 const esc = s => String(s ?? "").replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
 let key = localStorage.getItem("ck") || "", S, tab = "Overview";
 
+let busy = 0;
+const bar = document.getElementById("bar");
+const waitCard = t => '<div class="card wait"><div class="spinner"></div><b>' + t + '</b><p class="hint">The first load can take up to 20 seconds.</p></div>';
 async function call(action, extra = {}) {
-  const r = await fetch(API_URL, { method: "POST", headers: { "Content-Type": "text/plain" }, body: JSON.stringify({ action, key, ...extra }) });
-  return r.json();
+  busy++; bar.hidden = false;
+  try {
+    const r = await fetch(API_URL, { method: "POST", headers: { "Content-Type": "text/plain" }, body: JSON.stringify({ action, key, ...extra }) });
+    return await r.json();
+  } finally { if (--busy === 0) bar.hidden = true; }
 }
 function login(msg = "") {
   document.getElementById("out").hidden = true;
   app.innerHTML = `<div class="card"><h2>Admin login</h2><label for="pw">Password</label><input id="pw" type="password" autocomplete="current-password"><button id="go">Log in</button><div class="msg" style="color:var(--red)">${esc(msg)}</div></div>`;
-  document.getElementById("go").onclick = () => { key = pw.value; refresh(true); };
+  document.getElementById("go").onclick = e => { key = pw.value; e.target.disabled = true; e.target.textContent = "Logging in..."; refresh(true); };
 }
 async function refresh(fresh) {
   try {
@@ -132,7 +146,7 @@ function settings() {
   };
 }
 window.addEventListener("error", e => { app.innerHTML = '<div class="card">Script error: ' + esc(e.message) + '</div>'; });
-app.innerHTML = '<div class="card">Loading...</div>';
+app.innerHTML = waitCard('Loading dashboard...');
 key ? refresh() : login();
 </script>
 </body>
