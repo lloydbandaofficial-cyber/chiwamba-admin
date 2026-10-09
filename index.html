@@ -59,7 +59,7 @@ async function refresh(fresh) {
     if (!r.ok) { localStorage.removeItem("ck"); return login(r.error); }
     if (fresh) localStorage.setItem("ck", key);
     S = r; document.getElementById("out").hidden = false; render();
-  } catch { app.innerHTML = '<div class="card">Could not connect. Check your internet and reload.</div>'; }
+  } catch (err) { app.innerHTML = '<div class="card">Could not connect: ' + esc(err.message) + '. Reload and try again.</div>'; }
 }
 document.getElementById("out").onclick = () => { localStorage.removeItem("ck"); key = ""; login(); };
 
@@ -131,6 +131,8 @@ function settings() {
     document.getElementById("sm").textContent = r.ok ? "Saved. The website is updated." : (r.error || "Failed"); e.target.disabled = false;
   };
 }
+window.addEventListener("error", e => { app.innerHTML = '<div class="card">Script error: ' + esc(e.message) + '</div>'; });
+app.innerHTML = '<div class="card">Loading...</div>';
 key ? refresh() : login();
 </script>
 </body>
