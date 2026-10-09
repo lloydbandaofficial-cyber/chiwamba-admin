@@ -41,4 +41,97 @@ button.sm{width:auto;margin:0;padding:6px 12px;font-size:.85rem}
 // Same Web app URL as the website
 const API_URL = "https://script.google.com/macros/s/AKfycbwXKQlFAgJKC5R-Hz30RSJV-ZQUFlzm5o0EAzM241XQwMI5nc5jkvzvMqXbGSX7ZSankw/exec";
 const app = document.getElementById("app");
-const esc = s => String(s ?? "").replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&qu
+const esc = s => String(s ?? "").replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+let key = localStorage.getItem("ck") || "", S, tab = "Overview";
+
+async function call(action, extra = {}) {
+  const r = await fetch(API_URL, { method: "POST", headers: { "Content-Type": "text/plain" }, body: JSON.stringify({ action, key, ...extra }) });
+  return r.json();
+}
+function login(msg = "") {
+  document.getElementById("out").hidden = true;
+  app.innerHTML = `<div class="card"><h2>Admin login</h2><label for="pw">Password</label><input id="pw" type="password" autocomplete="current-password"><button id="go">Log in</button><div class="msg" style="color:var(--red)">${esc(msg)}</div></div>`;
+  document.getElementById("go").onclick = () => { key = pw.value; refresh(true); };
+}
+async function refresh(fresh) {
+  try {
+    const r = await call("admin_stats");
+    if (!r.ok) { localStorage.removeItem("ck"); return login(r.error); }
+    if (fresh) localStorage.setItem("ck", key);
+    S = r; document.getElementById("out").hidden = false; render();
+  } catch { app.innerHTML = '<div class="card">Could not connect. Check your internet and reload.</div>'; }
+}
+document.getElementById("out").onclick = () => { localStorage.removeItem("ck"); key = ""; login(); };
+
+function toLocal(iso) { if (!iso) return ""; const d = new Date(iso); return isNaN(d) ? "" : new Date(d - d.getTimezoneOffset() * 6e4).toISOString().slice(0, 16); }
+async function act(btn, action, extra) { btn.disabled = true; const r = await call(action, extra); if (!r.ok) alert(r.error || "Failed"); await refresh(); }
+
+function render() {
+  const tabs = ["Overview", "Nominations", "Finalists", "Settings"];
+  app.innerHTML = `<div class="tabs">${tabs.map(t => `<button class="${t === tab ? "on" : "alt"}" data-t="${t}">${t}</button>`).join("")}</div><div id="v"></div>`;
+  app.querySelector(".tabs").onclick = e => { if (e.target.dataset.t) { tab = e.target.dataset.t; render(); } };
+  ({ Overview: overview, Nominations: nominations, Finalists: finalists, Settings: settings })[tab]();
+}
+const v = () => document.getElementById("v");
+
+function overview() {
+  const c = S.config, n = S.counts;
+  v().innerHTML = `<div class="card"><h2>Website status</h2>
+    <div class="grid"><div class="stat"><b>${n.nominations}</b>nominations</div><div class="stat"><b>${n.votes}</b>votes</div><div class="stat"><b>${n.voters}</b>voters</div></div></div>
+    <div class="card"><h2>Phase</h2><div class="grid">${["nominations", "voting", "closed"].map(p => `<button class="${c.phase === p ? "on" : "alt"}" data-p="${p}">${p[0].toUpperCase() + p.slice(1)}</button>`).join("")}</div>
+    <label>Public results page</label><button class="${c.show_results === "yes" ? "on" : "alt"}" id="sr">${c.show_results === "yes" ? "Visible. Tap to hide" : "Hidden. Tap to show"}</button></div>
+    <div class="card"><h2>Current leaders</h2>${S.categories.map(cat => { const t = cat.nominees.slice().sort((a, b) => b.votes - a.votes)[0]; return t ? `<div class="row"><span>${esc(cat.name)}</span><b>${esc(t.name)} (${t.votes})</b></div>` : ""; }).join("") || '<p class="hint">No finalists yet.</p>'}</div>`;
+  const late = c.deadline_at && new Date(c.deadline_at) < new Date();
+  if (late) v().insertAdjacentHTML("afterbegin", `<div class="card" style="border-top-color:var(--red)"><b>The deadline has passed.</b> The site rejects votes and nominations until you set a new deadline in Settings.</div>`);
+  const days = S.daily.slice(-7).reverse().map(d => `<div class="row"><span>${esc(d.day)}</span><span>${d.votes} votes, ${d.nominations} nominations</span></div>`).join("") || '<p class="hint">No activity yet.</p>';
+  const rec = S.recent.map(x => `<div class="row"><span>${esc(x.type)}: ${esc(x.nominee)} <span class="hint">(${esc(x.category)}, ${esc(x.who)})</span></span></div>`).join("") || '<p class="hint">Nothing yet.</p>';
+  v().insertAdjacentHTML("beforeend", `<div class="card"><h2>Last 7 days</h2>${days}</div><div class="card"><h2>Recent activity</h2>${rec}</div><div class="card"><h2>Results</h2><button id="ex" class="alt">Download results (CSV)</button></div>`);
+  document.getElementById("ex").onclick = async e => {
+    e.target.disabled = true; const r = await call("admin_export"); e.target.disabled = false;
+    if (!r.ok) return alert(r.error || "Failed");
+    const q = x => '"' + String(x).replace(/"/g, '""') + '"';
+    const csv = [r.headers, ...r.rows].map(row => row.map(q).join(",")).join("\n");
+    const a = document.createElement("a"); a.href = URL.createObjectURL(new Blob([csv], { type: "text/csv" })); a.download = "chiwamba-results.csv"; a.click();
+  };
+  v().querySelectorAll("[data-p]").forEach(b => b.onclick = () => act(b, "admin_config", { values: { phase: b.dataset.p } }));
+  document.getElementById("sr").onclick = e => act(e.target, "admin_config", { values: { show_results: c.show_results === "yes" ? "no" : "yes" } });
+}
+
+function nominations() {
+  const cats = [...new Set(S.nominations.map(x => x.category))];
+  v().innerHTML = `<p class="hint">Public nominations, most popular first. Tap Add to make someone a finalist.</p>` + (cats.map(c => `<div class="card"><h2>${esc(c)}</h2>${S.nominations.filter(x => x.category === c).map(x => `<div class="row"><span>${esc(x.name)} (${x.count})</span><button class="sm" data-c="${esc(c)}" data-n="${esc(x.name)}">Add</button></div>`).join("")}</div>`).join("") || '<div class="card">No nominations yet.</div>');
+  v().querySelectorAll("[data-n]").forEach(b => b.onclick = () => act(b, "admin_add_nominee", { category: b.dataset.c, nominee: b.dataset.n, image: "" }));
+}
+
+function finalists() {
+  v().innerHTML = `<div class="card"><h2>Add a finalist</h2>
+    <label for="fc">Category</label><select id="fc">${S.categories.map(c => `<option>${esc(c.name)}</option>`).join("")}</select>
+    <label for="fn">Name</label><input id="fn" maxlength="100"><label for="fi">Photo link (optional)</label><input id="fi" placeholder="https://...">
+    <button id="fa">Add finalist</button></div>` +
+    S.categories.map(c => `<div class="card"><h2>${esc(c.name)}</h2>${c.nominees.map(n => `<div class="row"><span>${esc(n.name)} (${n.votes} votes)</span><button class="sm alt" data-c="${esc(c.name)}" data-n="${esc(n.name)}">Remove</button></div>`).join("") || '<p class="hint">None yet.</p>'}</div>`).join("");
+  document.getElementById("fa").onclick = e => act(e.target, "admin_add_nominee", { category: fc.value, nominee: fn.value, image: fi.value });
+  v().querySelectorAll("[data-n]").forEach(b => b.onclick = () => confirm("Remove " + b.dataset.n + "?") && act(b, "admin_remove_nominee", { category: b.dataset.c, nominee: b.dataset.n }));
+  v().insertAdjacentHTML("beforeend", `<div class="card"><h2>Categories</h2><label for="nc">New category</label><input id="nc" maxlength="100"><button id="ac">Add category</button>${S.categories.map(c => `<div class="row"><span>${esc(c.name)}</span><button class="sm alt" data-rc="${esc(c.name)}">Remove</button></div>`).join("")}<p class="hint">Removing a category hides it from the site. Its nominees and votes stay in the sheet.</p></div>`);
+  document.getElementById("ac").onclick = e => act(e.target, "admin_add_category", { category: nc.value });
+  v().querySelectorAll("[data-rc]").forEach(b => b.onclick = () => confirm("Remove category " + b.dataset.rc + "?") && act(b, "admin_remove_category", { category: b.dataset.rc }));
+}
+
+function settings() {
+  const c = S.config;
+  v().innerHTML = `<div class="card"><h2>Deadline</h2>
+    <p class="hint">Applies to the active phase. Leave the date empty for no deadline. Once it passes, the site rejects nominations and votes.</p>
+    <label for="dl">Countdown label</label><input id="dl" maxlength="100" value="${esc(c.deadline_label)}">
+    <label for="d1">Round closes</label><input id="d1" type="datetime-local" value="${toLocal(c.deadline_at)}">
+    <button id="sv">Save deadline</button><div class="msg" id="sm"></div></div>`;
+  document.getElementById("sv").onclick = async e => {
+    e.target.disabled = true;
+    const at = d1.value ? new Date(d1.value).toISOString() : "";
+    const r = await call("admin_config", { values: { deadline_label: dl.value, deadline_at: at } });
+    if (r.ok) { c.deadline_label = dl.value; c.deadline_at = at; }
+    document.getElementById("sm").textContent = r.ok ? "Saved. The website is updated." : (r.error || "Failed"); e.target.disabled = false;
+  };
+}
+key ? refresh() : login();
+</script>
+</body>
+</html>
